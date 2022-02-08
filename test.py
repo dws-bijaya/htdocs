@@ -23,8 +23,19 @@ if what == "dns-query":
 		HOST_BIN = "/usr/bin/host"
 
 	class network_tools:
-
-		spf_qualifier = {'+': 'Pass', '-': 'Fail', '~': 'SoftFail', '?': 'Neutral'}
+		spf_errmsg = {
+		    'INVALID_QUALIFIER': (1, 'Invalid qualifier found'),
+		    'INVALID_NETMASK': (2, 'It is not a valid netmask'),
+		    'EMPTY_VALUE': (3, 'Empty value found.'),
+		    'INVALID_IPv4_ADDRESS': (4, 'Invalid IPv4 Address'),
+		    'INVALID_IPv6_ADDRESS': (5, 'Invalid IPv6 Address'),
+		    'INVALID_NETMASK_OR_IPADDRESS': (6, 'Invalid netmask or IP Address.'),
+		    'INVALID_IPv4_HOST_BITS_SET': (7, 'Invalid IPv4/IPv6 host bits set.'),
+		    'NO_ALL_FOUND': (8, 'No all machanim found.'),
+		    'NO_VERSION_MACHANISM': (8, 'No version machanim found.'),
+		    'INVALID_MACHANISM': (9, 'Invalid machanism found.')
+		}
+		spf_qualifier = {'+': 'Pass', '-': 'Fail', '~': 'SoftFail', '?': 'Neutral', '~~unknown~~': 'Unknown Qualifier.'}
 		spf_desc = {
 		    'v': 'Version of the SPF record',
 		    'ip4': 'If the IPv4 address falls inside the specified range, the match is made.',
@@ -153,98 +164,394 @@ if what == "dns-query":
 		@classmethod
 		def parse_spf(self, spf_record):
 			if spf_record is None or not len(spf_record):
-				return None
+				return (None, None)
 
+			spf_err = 0
 			mechanisms = spf_record[0].split(" ")
 			spf = OrderedDict()
-			rip4 = r"^(\+|-|~|\?)?ip4:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(\/(\d+))?"
-			rip6 = r"^(\+|-|~|\?)?ip6:((?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4})(\/(\d+))?"
+			#die(mechanisms)
 			for mechanism in mechanisms:
 				mechanism = mechanism.strip().lower()
+				print(mechanism)
+				if not mechanism:
+					continue
 
 				vreg = "^v=(.[^ ]*)$"
 				vm = re.findall(vreg, mechanism, re.I)
 				if len(vm) == 1:
-					spf["version"] = {'errno': 0, 'errmsg': '+OK', 'data' []}
+					spf["version"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
 					spf["version"]['v'] = vm[0]
 					if vm[0] not in ['spf1']:
 						spf["version"]['errno'] = 1
 						spf["version"]['errmsg'] = 'Invalid spg version found'
 					continue
 
-				areg = "^(\+|-|~|\?)?(all)$"
-				mam = re.findall(areg, mechanism, re.I)
-				if len(mam) == 1:
-					qualifier = '+'
-					try:
-						qualifier = mam[0][0] if mip4[0][0] else '+'
-					except:
-						pass
-					if 'all' not in spf:
-						spf['all'] = []
-
-					spf['all'].append((qualifier, self.spf_qualifier[qualifier], 'all'))
+				#The "ip4" mechanism
+				spf_err, cont = self._parse_spf_machanism_ip4(mechanism, spf, spf_err)
+				#exit([cont])
+				if cont:
 					continue
 
-				mip4 = re.findall(rip4, mechanism, re.I)
-				if len(mip4) == 1:
-					qualifier = '+'
-					try:
-						qualifier = mip4[0][0] if mip4[0][0] else '+'
-					except:
-						pass
-					ip = mip4[0][1]
-					ip_prefix = mip4[0][3]
-
-					if 'ip4' not in spf:
-						spf['ip4'] = []
-
-					spf['ip4'].append((qualifier, self.spf_qualifier[qualifier], ip, ip_prefix))
-					continue
-
-					#exit([mip4, mechanism, ip, ip_prefix])
-				#exit("Not Found")
 				#The "ip6" mechanism
-				mip6 = re.findall(rip6, mechanism, re.I)
-				if len(mip6) == 1:
-					qualifier = '+'
-					try:
-						qualifier = mip6[0][0] if mip6[0][0] else '+'
-					except:
-						pass
-					ip = mip6[0][1]
-					prefix = mip6[0][3]
-					if 'ip6' not in spf:
-						spf['ip6'] = []
-
-					spf['ip6'].append((qualifier, self.spf_qualifier[qualifier], ip, prefix))
+				spf_err, cont = self._parse_spf_machanism_ip6(mechanism, spf, spf_err)
+				if cont:
 					continue
 
 				#The "a" mechanism
-				ripa = r"^(\+|-|~|\?)?a(:?)((([a-z0-9]\-*[a-z0-9]*){1,63}\.?){1,255})?(/?(\d+))?"
-				mipa = re.findall(ripa, mechanism, re.I)
-				print(mechanism)
-				if len(mipa) == 1:
-					qualifier = '+'
-					try:
-						qualifier = mipa[0][0] if mipa[0][0] else '+'
-					except:
-						pass
-
-					domain = ''
-					if mipa[0][1] == ":":
-						domain = mipa[0][2]
-						if not domain:
-							break
-					#die(domain)
-					prefix = mipa[0][6]
-					if 'a' not in spf:
-						spf['a'] = []
-
-					spf['a'].append((qualifier, self.spf_qualifier[qualifier], domain, prefix))
+				spf_err, cont = self._parse_spf_machanism_a(mechanism, spf, spf_err)
+				if cont:
 					continue
 
+				#The "mx" mechanism
+				spf_err, cont = self._parse_spf_machanism_mx(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				#The "ptr" mechanism
+				spf_err, cont = self._parse_spf_machanism_ptr(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				#die(mechanism)
+				#The "exists" mechanism
+				spf_err, cont = self._parse_spf_machanism_exists(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				#The "include" mechanism
+				spf_err, cont = self._parse_spf_machanism_include(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				#The "redirect" mechanism
+				spf_err, cont = self._parse_spf_machanism_redirect(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				#The "all" mechanism
+				spf_err, cont = self._parse_spf_machanism_all(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+				spf_err, cont = self._parse_spf_machanism_fallback(mechanism, spf, spf_err)
+				if cont:
+					continue
+
+			if 'all' not in spf:
+				spf["all"] = {'errno': self.spf_errmsg['NO_ALL_FOUND'][0], 'errmsg': self.spf_errmsg['NO_ALL_FOUND'][1], 'data': []}
+				spf_err += 1
+
+			if 'version' not in spf:
+				spf["version"] = {'errno': self.spf_errmsg['NO_VERSION_MACHANISM'][0], 'errmsg': self.spf_errmsg['NO_VERSION_MACHANISM'][1], 'data': []}
+				spf_err += 1
+
+			(None, None)
 			die([spf])
+
+		@classmethod
+		def _parse_spf_machanism_fallback(self, mechanism, spf, spf_err):
+			#mechanism = '-ip6:2402:3a80:1224:6d81:ac62:11e1:1333:1f51/87'
+			#die(mechanism)
+			#mechanism = "~ip4:64.91.229.99/34"
+			#mechanism = "ip=weqw"
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)([a-z0-9]+)((|([:=]?)|([:=]?)(.*)?))$"
+			matches = re.findall(regex, mechanism, re.I)
+			#die([matches, mechanism])
+			if len(matches) == 0:
+				return (spf_err, False)
+			mchm = matches[0][1]
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][len(matches[0]) - 1] if matches[0][5] == ":" or matches[0][5] == "=" else ''
+			#die([qualifier, val, matches[0][5]])
+			if mchm in ['all', 'a', 'ip4', 'ip6', 'mx', 'ptr', 'exists', 'include', 'redirect']:
+				return (spf_err, False)
+
+			spf[mchm] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+			spf[mchm]['errno'] = self.spf_errmsg['INVALID_MACHANISM'][0]
+			spf[mchm]['errmsg'] = self.spf_errmsg['INVALID_MACHANISM'][1]
+			spf_err += 1
+			spf[mchm]['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_redirect(self, mechanism, spf, spf_err):
+			mechanism = "?redirect"
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)redirect(=)?()?$"
+			matches = re.findall(regex, mechanism, re.I)
+			die(matches)
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, domain])
+			if "exists" not in spf:
+				spf["exists"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["exists"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["exists"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+
+			spf['exists']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain))
+			#exit([qualifier, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_ip4(self, mechanism, spf, spf_err):
+			#mechanism = '-ip6:2402:3a80:1224:6d81:ac62:11e1:1333:1f51/87'
+			#die(mechanism)
+			#mechanism = "~ip4:64.91.229.99/34"
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)ip4(:)?((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(\/(\d+))?)$"
+			matches = re.findall(regex, mechanism, re.I)
+			#die([matches, mechanism])
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			prefix = matches[0][len(matches[0]) - 1] if matches[0][1] == ":" else matches[0][4]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, prefix, domain])
+			if prefix:
+				try:
+					prefix = int(prefix)
+				except:
+					prefix = 0
+
+			if "ip4" not in spf:
+				spf["ip4"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["ip4"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+			elif prefix and domain:
+				try:
+					print('%s/%s' % (domain, prefix))
+					ipaddress.IPv4Network('%s/%s' % (domain, prefix))
+				except ValueError as e:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_IPv4_HOST_BITS_SET'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_IPv4_HOST_BITS_SET'][1]
+					spf_err += 1
+				except ipaddress.AddressValueError as e:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_IPv4_ADDRESS'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_IPv4_ADDRESS'][1]
+					spf_err += 1
+				except ipaddress.NetmaskValueError as e:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_NETMASK'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK'][1]
+					spf_err += 1
+				except:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_NETMASK_OR_IPADDRESS'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK_OR_IPADDRESS'][1]
+					spf_err += 1
+
+			#val =
+			spf['ip4']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain, prefix))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_ip6(self, mechanism, spf, spf_err):
+			#mechanism = '-ip6:2402:3a80:1224:6d81:ac62:11e1:1333:1f51/87'
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)ip6(:)?(((?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4})(\/(\d+))?)$"
+			matches = re.findall(regex, mechanism, re.I)
+			#die([matches, mechanism])
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			prefix = matches[0][len(matches[0]) - 1] if matches[0][1] == ":" else matches[0][4]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, prefix, domain])
+			if prefix:
+				try:
+					prefix = int(prefix)
+				except:
+					prefix = 0
+
+			if "ip6" not in spf:
+				spf["ip6"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["ip6"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["ip6"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+			elif prefix and domain:
+				try:
+					ipaddress.IPv6Network('%s/%s' % (domain, prefix))
+				except ValueError as e:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_IPv4_HOST_BITS_SET'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_IPv4_HOST_BITS_SET'][1]
+					spf_err += 1
+				except ipaddress.AddressValueError as e:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_IPv4_ADDRESS'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_IPv4_ADDRESS'][1]
+					spf_err += 1
+				except ipaddress.NetmaskValueError as e:
+					spf["ip6"]['errno'] = self.spf_errmsg['INVALID_NETMASK'][0]
+					spf["ip6"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK'][1]
+					spf_err += 1
+				except:
+					spf["ip4"]['errno'] = self.spf_errmsg['INVALID_NETMASK_OR_IPADDRESS'][0]
+					spf["ip4"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK_OR_IPADDRESS'][1]
+					spf_err += 1
+
+			#val =
+			spf['ip6']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain, prefix))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_a(self, mechanism, spf, spf_err):
+			#mechanism = '?a:rankwatch.collabx.com'
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)a(:)?((/(\d+))?((([\da-zA-Z])([_\w-]{,62})\.){,127}(([\da-zA-Z])[_\w-]{,61})?([\da-zA-Z]\.((xn\-\-[a-zA-Z\d]+)|([a-zA-Z\d]{2,}))))?(/(\d+))?)$"
+			matches = re.findall(regex, mechanism, re.I)
+			#die([matches, mechanism])
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			prefix = matches[0][len(matches[0]) - 1] if matches[0][1] == ":" else matches[0][4]
+			domain = matches[0][5] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, prefix, domain])
+			if prefix:
+				try:
+					prefix = int(prefix)
+				except:
+					prefix = 0
+
+			if "a" not in spf:
+				spf["a"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["a"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["a"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+			elif not (prefix > 1 and prefix < 33):
+				spf["a"]['errno'] = self.spf_errmsg['INVALID_NETMASK'][0]
+				spf["a"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK'][1]
+				spf_err += 1
+
+			#val =
+			spf['a']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain, prefix))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_mx(self, mechanism, spf, spf_err):
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)mx(:)?((/(\d+))?((([\da-zA-Z])([_\w-]{,62})\.){,127}(([\da-zA-Z])[_\w-]{,61})?([\da-zA-Z]\.((xn\-\-[a-zA-Z\d]+)|([a-zA-Z\d]{2,}))))?(/(\d+))?)$"
+			matches = re.findall(regex, mechanism, re.I)
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			prefix = matches[0][len(matches[0]) - 1] if matches[0][1] == ":" else matches[0][4]
+			domain = matches[0][5] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, prefix, domain])
+			if prefix:
+				try:
+					prefix = int(prefix)
+				except:
+					prefix = 0
+
+			if "mx" not in spf:
+				spf["mx"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["mx"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["mx"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+			elif not (prefix > 1 and prefix < 33):
+				spf["mx"]['errno'] = self.spf_errmsg['INVALID_NETMASK'][0]
+				spf["mx"]['errmsg'] = self.spf_errmsg['INVALID_NETMASK'][1]
+				spf_err += 1
+
+			#val =
+			spf['mx']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain, prefix))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_ptr(self, mechanism, spf, spf_err):
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)ptr(:)?(((([\da-zA-Z])([_\w-]{,62})\.){,127}(([\da-zA-Z])[_\w-]{,61})?([\da-zA-Z]\.((xn\-\-[a-zA-Z\d]+)|([a-zA-Z\d]{2,}))))?)$"
+			matches = re.findall(regex, mechanism, re.I)
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, domain])
+			if "ptr" not in spf:
+				spf["ptr"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["ptr"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["ptr"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+
+			spf['ptr']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain))
+			#exit([qualifier, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_exists(self, mechanism, spf, spf_err):
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)exists(:)?(((([\da-zA-Z])([_\w-]{,62})\.){,127}(([\da-zA-Z])[_\w-]{,61})?([\da-zA-Z]\.((xn\-\-[a-zA-Z\d]+)|([a-zA-Z\d]{2,})))))$"
+			matches = re.findall(regex, mechanism, re.I)
+			die([matches])
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, domain])
+			if "exists" not in spf:
+				spf["exists"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["exists"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["exists"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+
+			spf['exists']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain))
+			#exit([qualifier, domain, spf])
+			return (spf_err, True)
+
+		@classmethod
+		def _parse_spf_machanism_include(self, mechanism, spf, spf_err):
+			regex = r"^(\+|-|~|\?|[^0-9-A-z]?)include(:)?((((([\da-zA-Z])([_\w-]{,62})\.){,127}(([\da-zA-Z])[_\w-]{,61})?([\da-zA-Z]\.((xn\-\-[a-zA-Z\d]+)|([a-zA-Z\d]{2,}))))))?$"
+			matches = re.findall(regex, mechanism, re.I)
+			#die(matches)
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][2]
+			domain = matches[0][3] if matches[0][1] == ":" and matches[0][5] else ''
+			#die([qualifier, val, domain])
+			if "include" not in spf:
+				spf["include"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+
+			if qualifier not in self.spf_qualifier:
+				spf["include"]['errno'] = self.spf_errmsg['INVALID_QUALIFIER'][0]
+				spf["include"]['errmsg'] = self.spf_errmsg['INVALID_QUALIFIER'][1]
+				spf_err += 1
+			elif domain == '' or val == "":
+				spf["include"]['errno'] = self.spf_errmsg['EMPTY_VALUE'][0]
+				spf["include"]['errmsg'] = self.spf_errmsg['EMPTY_VALUE'][1]
+				spf_err += 1
+
+			spf['include']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val, domain))
+			#exit([qualifier, domain, spf])
+			return (spf_err, True)
 
 		@classmethod
 		def _parse_spf_records(self, rec_zones, ipaddr):
@@ -272,7 +579,23 @@ if what == "dns-query":
 					break
 			exit(spf)
 
-	spf_record = ('v=spf1 ~ip4:64.91.229.99 -ip6:2402:3a80:1224:6d81:ac62:11e1:1333:1f51/24 ?a:collax.com/34 ~all', 'collabx.com', '3600')
+		@classmethod
+		def _parse_spf_machanism_all(self, mechanism, spf, spf_err):
+			regex = "^(\+|-|~|\?|[^0-9-A-z]?)(all)$"
+			matches = re.findall(regex, mechanism, re.I)
+			#exit(matches)
+			if len(matches) == 0:
+				return (spf_err, False)
+
+			qualifier = matches[0][0] if matches[0][0] else '+'
+			val = matches[0][1]
+			spf["all"] = {'errno': 0, 'errmsg': '+OK', 'data': []}
+			spf['ip4']['data'].append((qualifier, self.spf_qualifier[qualifier] if qualifier in self.spf_qualifier else self.spf_qualifier['~~unknown~~'], val))
+			#exit([qualifier, prefix, domain, spf])
+			return (spf_err, True)
+
+	spf_record = ('v=spf1 exp : 3333 ~ip4:64.91.229.99 -ip6:2402:3a80:1224:6d81:ac62:11e1:1333:1f51/24 ?a:collax.com/34 *mx:rankwatch.collabx.com/32 -ptr:rankwatch.com  -exists:rankwatch.com ~include:rankwatch.com redirect=abcd.com ~all',
+	              'collabx.com', '3600')
 	parse_spf = network_tools.parse_spf(spf_record)
 	exit()
 
@@ -319,7 +642,7 @@ collabx.com name server ns.liquidweb.com.
 	exit()
 
 import socket, os, sys
-from urllib.parse import urlparse
+from urllib.parse import ParseResultBytes, urlparse
 
 from contextlib import contextmanager
 import signal
